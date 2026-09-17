@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
  
@@ -6,8 +7,8 @@ pipeline {
         NETWORK_NAME = "myapp-network"
         VOLUME_NAME = "db-data"
         IMAGE_TAG = "v${BUILD_NUMBER}"
-        NGINX_CONF = "/root/flask-db-app/nginx/nginx.conf"
-        STATE_FILE = "/root/flask-db-app/active_color.txt"
+        NGINX_CONF = "/home/naim/flask-db-app/nginx/nginx.conf"
+        STATE_FILE = "/home/naim/flask-db-app/active_color.txt"
     }
  
     stages {
@@ -127,9 +128,15 @@ pipeline {
         stage('Health Check New Color') {
             steps {
                 sh '''
-                    sleep 5
-                    docker run --rm --network $NETWORK_NAME curlimages/curl:latest \
-                      curl -f http://flask-$NEW_COLOR:5000
+                    for i in $(seq 1 10); do
+                        if docker run --rm --network $NETWORK_NAME curlimages/curl:latest \
+                          curl -sf http://flask-$NEW_COLOR:5000 > /dev/null; then
+                            echo "flask-$NEW_COLOR is healthy."
+                            break
+                        fi
+                        echo "Waiting for flask-$NEW_COLOR to become reachable... ($i/10)"
+                        sleep 2
+                    done
                 '''
             }
         }
@@ -155,6 +162,14 @@ pipeline {
         stage('Final Verification') {
             steps {
                 sh '''
+                    for i in $(seq 1 10); do
+                        if curl -sf http://localhost:5000 > /dev/null; then
+                            echo "Verified — Nginx is correctly serving flask-$NEW_COLOR."
+                            break
+                        fi
+                        echo "Waiting for Nginx to settle onto flask-$NEW_COLOR... ($i/10)"
+                        sleep 2
+                    done
                     curl -f http://localhost:5000
                     echo ""
                     echo "Zero-downtime deploy complete — live version is now: $NEW_COLOR"
