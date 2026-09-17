@@ -5,7 +5,6 @@ pipeline {
         IMAGE_REPO = "naim8855/flask-app"
         NETWORK_NAME = "myapp-network"
         VOLUME_NAME = "db-data"
-        // BUILD_NUMBER is a built-in Jenkins variable — auto-increments every run: v1, v2, v3...
         IMAGE_TAG = "v${BUILD_NUMBER}"
     }
 
@@ -28,14 +27,13 @@ pipeline {
         }
 
         stage('Run Tests') {
-    steps {
-        dir('flask-app') {
-            sh '''
-                docker run --rm $IMAGE_REPO:$IMAGE_TAG python3 -m pytest test_app.py -v
-            '''
+            steps {
+                sh '''
+                    docker run --rm $IMAGE_REPO:$IMAGE_TAG python3 -m pytest test_app.py -v
+                '''
+            }
         }
-    }
-}
+
         stage('Login to Docker Hub') {
             steps {
                 withCredentials([usernamePassword(
@@ -129,10 +127,10 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline succeeded — deployed ${IMAGE_REPO}:${IMAGE_TAG}, also pushed as :latest"
+            echo "Pipeline succeeded — tests passed, deployed ${IMAGE_REPO}:${IMAGE_TAG}"
         }
         failure {
-            echo 'Pipeline failed — check the stage logs above.'
+            echo 'Pipeline failed — check the stage logs above. If tests failed, the image was never pushed or deployed.'
         }
         always {
             sh 'docker logout || true'
