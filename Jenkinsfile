@@ -2,16 +2,49 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "naim8855/flask-app:latest"
+        IMAGE_REPO = "naim8855/flask-app"
         NETWORK_NAME = "myapp-network"
         VOLUME_NAME = "db-data"
+        // BUILD_NUMBER is a built-in Jenkins variable — auto-increments every run: v1, v2, v3...
+        IMAGE_TAG = "v${BUILD_NUMBER}"
     }
 
     stages {
 
-        stage('Pull Flask Image') {
+        stage('Checkout Code') {
             steps {
-                sh 'docker pull $IMAGE_NAME'
+                checkout scm
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                dir('flask-app') {
+                    sh '''
+                        docker build -t $IMAGE_REPO:$IMAGE_TAG -t $IMAGE_REPO:latest .
+                    '''
+                }
+            }
+        }
+
+        stage('Login to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                }
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                sh '''
+                    docker push $IMAGE_REPO:$IMAGE_TAG
+                    docker push $IMAGE_REPO:latest
+                '''
             }
         }
 
@@ -70,7 +103,7 @@ pipeline {
                       --name flask-container \
                       --network $NETWORK_NAME \
                       -p 5000:5000 \
-                      $IMAGE_NAME
+                      $IMAGE_REPO:$IMAGE_TAG
                 '''
             }
         }
@@ -87,10 +120,13 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline completed successfully — app is running on port 5000.'
+            echo "Pipeline succeeded — deployed ${IMAGE_REPO}:${IMAGE_TAG}, also pushed as :latest"
         }
         failure {
             echo 'Pipeline failed — check the stage logs above.'
+        }
+        always {
+            sh 'docker logout || true'
         }
     }
 }
