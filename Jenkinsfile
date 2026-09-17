@@ -7,8 +7,8 @@ pipeline {
         NETWORK_NAME = "myapp-network"
         VOLUME_NAME = "db-data"
         IMAGE_TAG = "v${BUILD_NUMBER}"
-        NGINX_CONF = "/home/naim/flask-db-app/nginx/nginx.conf"
-        STATE_FILE = "/home/naim/flask-db-app/active_color.txt"
+        NGINX_CONF = "/root/flask-db-app/nginx/nginx.conf"
+        STATE_FILE = "/root/flask-db-app/active_color.txt"
     }
  
     stages {
