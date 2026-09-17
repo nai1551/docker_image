@@ -1,21 +1,23 @@
 pipeline {
     agent any
-
+ 
     environment {
         IMAGE_REPO = "naim8855/flask-app"
         NETWORK_NAME = "myapp-network"
         VOLUME_NAME = "db-data"
         IMAGE_TAG = "v${BUILD_NUMBER}"
+        NGINX_CONF = "/home/naim/flask-db-app/nginx/nginx.conf"
+        STATE_FILE = "/home/naim/flask-db-app/active_color.txt"
     }
-
+ 
     stages {
-
+ 
         stage('Checkout Code') {
             steps {
                 checkout scm
             }
         }
-
+ 
         stage('Build Image') {
             steps {
                 dir('flask-app') {
@@ -25,7 +27,7 @@ pipeline {
                 }
             }
         }
-
+ 
         stage('Run Tests') {
             steps {
                 sh '''
@@ -33,7 +35,7 @@ pipeline {
                 '''
             }
         }
-
+ 
         stage('Login to Docker Hub') {
             steps {
                 withCredentials([usernamePassword(
@@ -45,7 +47,7 @@ pipeline {
                 }
             }
         }
-
+ 
         stage('Push Image') {
             steps {
                 sh '''
@@ -54,7 +56,7 @@ pipeline {
                 '''
             }
         }
-
+ 
         stage('Ensure Network Exists') {
             steps {
                 sh '''
@@ -63,7 +65,7 @@ pipeline {
                 '''
             }
         }
-
+ 
         stage('Ensure Volume Exists') {
             steps {
                 sh '''
@@ -72,65 +74,101 @@ pipeline {
                 '''
             }
         }
-
-        stage('Start Database') {
+ 
+        stage('Ensure Database Running') {
             steps {
                 sh '''
-                    docker rm -f db-container || true
-                    docker run -d \
-                      --name db-container \
-                      --network $NETWORK_NAME \
-                      -e MYSQL_ROOT_PASSWORD=rootpass \
-                      -e MYSQL_DATABASE=mydb \
-                      -e MYSQL_USER=flaskuser \
-                      -e MYSQL_PASSWORD=flaskpass \
-                      -v $VOLUME_NAME:/var/lib/mysql \
-                      mysql:8
+                    if ! docker ps --format '{{.Names}}' | grep -q '^db-container$'; then
+                        docker run -d \
+                          --name db-container \
+                          --network $NETWORK_NAME \
+                          -e MYSQL_ROOT_PASSWORD=rootpass \
+                          -e MYSQL_DATABASE=mydb \
+                          -e MYSQL_USER=flaskuser \
+                          -e MYSQL_PASSWORD=flaskpass \
+                          -v $VOLUME_NAME:/var/lib/mysql \
+                          mysql:8
+                        for i in $(seq 1 20); do
+                            docker exec db-container mysqladmin ping -uroot -prootpass --silent && break
+                            sleep 3
+                        done
+                    else
+                        echo "Database already running — skipping."
+                    fi
                 '''
             }
         }
-
-        stage('Wait for Database') {
+ 
+        stage('Determine Active Color') {
             steps {
-                sh '''
-                    for i in $(seq 1 20); do
-                        docker exec db-container mysqladmin ping -uroot -prootpass --silent && break
-                        echo "Waiting for MySQL..."
-                        sleep 3
-                    done
-                '''
+                script {
+                    env.CURRENT_COLOR = sh(
+                        script: "cat ${STATE_FILE} 2>/dev/null || echo blue",
+                        returnStdout: true
+                    ).trim()
+                    env.NEW_COLOR = (env.CURRENT_COLOR == "blue") ? "green" : "blue"
+                    echo "Current active: ${env.CURRENT_COLOR} — deploying new version as: ${env.NEW_COLOR}"
+                }
             }
         }
-
-        stage('Deploy Flask App') {
+ 
+        stage('Deploy New Color (alongside old)') {
             steps {
                 sh '''
-                    docker rm -f flask-container || true
+                    docker rm -f flask-$NEW_COLOR || true
                     docker run -d \
-                      --name flask-container \
+                      --name flask-$NEW_COLOR \
                       --network $NETWORK_NAME \
-                      -p 5000:5000 \
                       $IMAGE_REPO:$IMAGE_TAG
                 '''
             }
         }
-
-        stage('Smoke Test') {
+ 
+        stage('Health Check New Color') {
             steps {
                 sh '''
                     sleep 5
+                    docker run --rm --network $NETWORK_NAME curlimages/curl:latest \
+                      curl -f http://flask-$NEW_COLOR:5000
+                '''
+            }
+        }
+ 
+        stage('Switch Traffic to New Color') {
+            steps {
+                sh '''
+                    sed -i "s/server flask-[a-z]*:5000;/server flask-$NEW_COLOR:5000;/" $NGINX_CONF
+                    docker exec nginx-proxy nginx -s reload
+                    echo -n "$NEW_COLOR" > $STATE_FILE
+                '''
+            }
+        }
+ 
+        stage('Remove Old Color') {
+            steps {
+                sh '''
+                    docker rm -f flask-$CURRENT_COLOR || true
+                '''
+            }
+        }
+ 
+        stage('Final Verification') {
+            steps {
+                sh '''
                     curl -f http://localhost:5000
+                    echo ""
+                    echo "Zero-downtime deploy complete — live version is now: $NEW_COLOR"
                 '''
             }
         }
     }
-
+ 
     post {
         success {
-            echo "Pipeline succeeded — tests passed, deployed ${IMAGE_REPO}:${IMAGE_TAG}"
+            echo "Pipeline succeeded — ${IMAGE_REPO}:${IMAGE_TAG} live as flask-${env.NEW_COLOR}, switched with zero downtime"
         }
         failure {
-            echo 'Pipeline failed — check the stage logs above. If tests failed, the image was never pushed or deployed.'
+            echo 'Pipeline failed — old version was left running untouched, nothing was switched.'
         }
         always {
             sh 'docker logout || true'
