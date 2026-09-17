@@ -27,6 +27,15 @@ pipeline {
             }
         }
 
+        stage('Run Tests') {
+    steps {
+        dir('flask-app') {
+            sh '''
+                docker run --rm $IMAGE_REPO:$IMAGE_TAG python3 -m pytest test_app.py -v
+            '''
+        }
+    }
+}
         stage('Login to Docker Hub') {
             steps {
                 withCredentials([usernamePassword(
